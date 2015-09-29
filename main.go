@@ -1,7 +1,8 @@
 // Copyright 2015 YP LLC.
 // Use of this source code is governed by an MIT-style
 // license that can be found in the LICENSE file.
-package main // import "github.com/yp-engineering/rbd-docker-plugin"
+package main 
+// import "github.com/yp-engineering/rbd-docker-plugin"
 
 // Ceph RBD VolumeDriver Docker Plugin, setup config and go
 
@@ -29,10 +30,12 @@ var (
 	pluginDir          = flag.String("plugins", "/run/docker/plugins", "Docker plugin directory for socket")
 	rootMountDir       = flag.String("mount", dkvolume.DefaultDockerRootDirectory, "Mount directory for volumes on host")
 	logDir             = flag.String("logdir", "/var/log", "Logfile directory")
-	canCreateVolumes   = flag.Bool("create", false, "Can auto Create RBD Images")
-	canRemoveVolumes   = flag.Bool("remove", false, "Can Remove (destroy) RBD Images (default: false, volume will be renamed zz_name)")
-	defaultImageSizeMB = flag.Int("size", 20*1024, "RBD Image size to Create (in MB) (default: 20480=20GB)")
+	canCreateVolumes   = flag.Bool("create", true, "Can auto Create RBD Images")
+	canRemoveVolumes   = flag.Bool("remove", true, "Can Remove (destroy) RBD Images (default: false, volume will be renamed zz_name)")
+	defaultImageSizeMB = flag.Int("size", 1024, "RBD Image size to Create (in MB) (default: 1024=1GB)")
 	defaultImageFSType = flag.String("fs", "xfs", "FS type for the created RBD Image (must have mkfs.type)")
+	proto              = flag.String("proto", "unix", "Docker plugin proto (unix or tcp)")
+	socketAddr         = flag.String("socketaddr", "", "socket addr when use tcp")
 )
 
 func init() {
@@ -118,8 +121,12 @@ func main() {
 	}()
 
 	// NOTE: pass empty string for group to skip broken chgrp in dkvolume lib
-	err = h.ServeUnix("", socket)
-
+	if *proto == "unix" {
+		err = h.ServeUnix("", socket)
+	} else if *proto == "tcp" {
+		err = h.ServeTCP(*pluginName, *socketAddr)
+	}
+	
 	if err != nil {
 		log.Printf("ERROR: Unable to create UNIX socket: %v", err)
 	}

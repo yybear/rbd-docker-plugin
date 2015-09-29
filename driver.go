@@ -655,6 +655,7 @@ func (d *cephRBDVolumeDriver) createRBDImage(pool string, name string, size int,
 	}
 
 	// lock it temporarily for fs creation
+	log.Println("DEBUG: lockImage")
 	lockname, err := d.lockImage(pool, name)
 	if err != nil {
 		// TODO: defer image delete?
@@ -668,12 +669,22 @@ func (d *cephRBDVolumeDriver) createRBDImage(pool string, name string, size int,
 		return err
 	}
 
-	// make the filesystem
-	_, err = sh(mkfs, device)
-	if err != nil {
-		defer d.unmapImageDevice(device)
-		defer d.unlockImage(pool, name, lockname)
+	// make the filesystem if necessary
+	var deviceType string
+	deviceType, err = d.deviceType(device)
+	if err != nil && err.Error() != "exit status 2" {
+		log.Printf("ERROR: get deviceType err %s", err)
 		return err
+	}
+	if deviceType == "" {
+		log.Printf("DEBUG: make filesystem mkfs %s device %s", mkfs, device)
+		_, err = sh(mkfs, device)
+		if err != nil {
+			log.Printf("ERROR: make filesystem err %s", err)
+			defer d.unmapImageDevice(device)
+			defer d.unlockImage(pool, name, lockname)
+			return err
+		}
 	}
 
 	// TODO: should we now just defer both of unmap and unlock? or catch err?
@@ -744,6 +755,7 @@ func (d *cephRBDVolumeDriver) lockImage(pool, imagename string) (string, error) 
 
 	ctx, err := d.openContext(pool)
 	if err != nil {
+		log.Printf("ERROR: open rbd context err %s", err)
 		return "", err
 	}
 	defer d.shutdownContext(ctx)
@@ -754,7 +766,7 @@ func (d *cephRBDVolumeDriver) lockImage(pool, imagename string) (string, error) 
 	// open it (read-only)
 	err = rbdImage.Open(true)
 	if err != nil {
-		log.Printf("ERROR: opening rbd image(%s): %s", imagename, err)
+		log.Printf("ERROR: opening rbd image(%s) read-only: %s", imagename, err)
 		return "", err
 	}
 	defer rbdImage.Close()
@@ -763,6 +775,7 @@ func (d *cephRBDVolumeDriver) lockImage(pool, imagename string) (string, error) 
 	locker := d.localLockerCookie()
 	err = rbdImage.LockExclusive(locker)
 	if err != nil {
+		log.Printf("ERROR: lockExclusive err %s", err)
 		return locker, err
 	}
 	return locker, nil
@@ -812,7 +825,8 @@ func (d *cephRBDVolumeDriver) unlockImage(pool, imagename, locker string) error 
 
 // mapImage will map the RBD Image to a kernel device
 func (d *cephRBDVolumeDriver) mapImage(pool, imagename string) (string, error) {
-	return sh("rbd", "map", "--id", d.user, "--pool", pool, imagename)
+	sh("rbd", "map", "--id", d.user, "--pool", pool, imagename)
+	return shCmd(fmt.Sprintf("rbd showmapped |grep %s|grep %s|awk 'NR==1 {print $5}'", pool, imagename))
 }
 
 // unmapImageDevice will release the mapped kernel device
@@ -862,15 +876,7 @@ func (d *cephRBDVolumeDriver) renameRBDImage(pool, name, newname string) error {
 func (d *cephRBDVolumeDriver) deviceType(device string) (string, error) {
 	// blkid Output:
 	//	/dev/rbd3: xfs
-	blkid, err := sh("blkid", "-o", "value", "-s", "TYPE", device)
-	if err != nil {
-		return "", err
-	}
-	if blkid != "" {
-		return blkid, nil
-	} else {
-		return "", errors.New("Unable to determine device fs type from blkid")
-	}
+	return sh("blkid", "-o", "value", "-s", "TYPE", device)
 }
 
 // mountDevice will call mount on kernel device with a docker volume subdirectory
@@ -896,4 +902,8 @@ func sh(name string, args ...string) (string, error) {
 	// TODO: capture and output STDERR to logfile?
 	out, err := cmd.Output()
 	return strings.Trim(string(out), " \n"), err
+}
+
+func shCmd(cmd string) (string, error) {
+	return sh("sh", "-c", cmd)
 }
